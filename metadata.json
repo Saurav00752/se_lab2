@@ -1,0 +1,6 @@
+{
+  "name": "Beacon — AI Student Dropout Prediction & Counselling",
+  "description": "Early-warning academic analytics, explainable dropout risk assessment, automated counselor alerts, and empathetic AI student counseling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
