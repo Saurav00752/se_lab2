@@ -33,6 +33,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthError(null);
     try {
       const res = await fetch('/api/demo-accounts');
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(
+          `Demo accounts API returned an unexpected response (${res.status}). Ensure /api serverless routes are enabled.`
+        );
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || 'Failed to load demo accounts.');

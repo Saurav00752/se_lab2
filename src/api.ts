@@ -32,6 +32,10 @@ async function request<T>(
     },
   });
 
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(`API returned an unexpected response (${res.status}).`);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.error || `Request failed with status ${res.status}`);

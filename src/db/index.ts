@@ -6,6 +6,14 @@ declare global {
   var _postgresPool: Pool | undefined;
 }
 
+export function isPostgresConfigured(): boolean {
+  return Boolean(
+    process.env.SQL_HOST &&
+      process.env.SQL_USER &&
+      process.env.SQL_DB_NAME
+  );
+}
+
 export const createPool = () => {
   if (!global._postgresPool) {
     global._postgresPool = new Pool({

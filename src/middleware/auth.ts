@@ -1,7 +1,5 @@
-import { eq } from 'drizzle-orm';
 import type { NextFunction, Request, Response } from 'express';
-import { db } from '../db/index.ts';
-import { users } from '../db/schema.ts';
+import { ensureSeeded, findUserByUid } from '../db/repository.ts';
 import type { UserAccount, UserRole } from '../types.ts';
 
 export interface AuthRequest extends Request {
@@ -22,34 +20,18 @@ export const requireAuth = async (
   }
 
   try {
-    const [row] = await db
-      .select()
-      .from(users)
-      .where(eq(users.uid, uidHeader))
-      .limit(1);
+    await ensureSeeded();
+    const dbUser = await findUserByUid(uidHeader);
 
-    if (!row) {
+    if (!dbUser) {
       res.status(401).json({ error: 'Unauthorized: Demo account not found.' });
       return;
     }
 
-    if (!row.active) {
+    if (!dbUser.active) {
       res.status(403).json({ error: 'This account has been suspended by an administrator.' });
       return;
     }
-
-    const dbUser: UserAccount = {
-      id: row.id,
-      uid: row.uid,
-      name: row.name,
-      email: row.email,
-      role: row.role as UserRole,
-      title: row.title,
-      linked_student_id: row.linkedStudentId,
-      avatar_url: row.avatarUrl,
-      active: row.active,
-      created_at: row.createdAt.toISOString(),
-    };
 
     req.dbUser = dbUser;
     req.effectiveRole = dbUser.role;

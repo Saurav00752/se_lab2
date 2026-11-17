@@ -14,7 +14,8 @@ import type {
   UserAccount,
   UserRole,
 } from '../types.ts';
-import { db } from './index.ts';
+import { db, isPostgresConfigured } from './index.ts';
+import { memoryStore } from './memoryStore.ts';
 import {
   academicMetrics,
   counselorAlerts,
@@ -26,8 +27,41 @@ import {
 } from './schema.ts';
 
 let seedPromise: Promise<void> | null = null;
+let useMemoryFallback = false;
+
+export function isMemoryMode(): boolean {
+  return useMemoryFallback || !isPostgresConfigured();
+}
+
+function isConnectionError(err: unknown): boolean {
+  let current: unknown = err;
+  while (current && typeof current === 'object') {
+    const rec = current as { code?: string; message?: string; cause?: unknown };
+    if (
+      rec.code &&
+      ['ECONNREFUSED', 'ENOENT', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', '57P01'].includes(
+        rec.code
+      )
+    ) {
+      return true;
+    }
+    if (
+      rec.message &&
+      /(ECONNREFUSED|ENOENT|ETIMEDOUT|ENOTFOUND|Connection terminated|timeout exceeded|connect)/i.test(
+        rec.message
+      )
+    ) {
+      return true;
+    }
+    current = rec.cause;
+  }
+  return false;
+}
 
 export async function ensureSeeded(): Promise<void> {
+  if (isMemoryMode()) {
+    return;
+  }
   if (seedPromise) return seedPromise;
   seedPromise = (async () => {
     try {
@@ -444,6 +478,14 @@ export async function ensureSeeded(): Promise<void> {
         },
       ]);
     } catch (error) {
+      if (isConnectionError(error)) {
+        console.warn(
+          'PostgreSQL unavailable; activating pre-seeded in-memory academic store:',
+          error instanceof Error ? error.message : error
+        );
+        useMemoryFallback = true;
+        return;
+      }
       seedPromise = null;
       console.error('Database seed failed:', error);
       throw new Error('Failed to initialize academic dataset.', { cause: error });
@@ -453,6 +495,7 @@ export async function ensureSeeded(): Promise<void> {
 }
 
 export async function getSystemConfig(): Promise<SystemConfig> {
+  if (isMemoryMode()) return memoryStore.getSystemConfig();
   try {
     const [row] = await db
       .select()
@@ -492,6 +535,7 @@ export async function getSystemConfig(): Promise<SystemConfig> {
 export async function getStudentFull(
   studentId: string
 ): Promise<StudentRecord | null> {
+  if (isMemoryMode()) return memoryStore.getStudentFull(studentId);
   try {
     const [row] = await db
       .select()
@@ -567,6 +611,7 @@ export async function getStudentFull(
 }
 
 export async function getAllStudents(): Promise<StudentRecord[]> {
+  if (isMemoryMode()) return memoryStore.getAllStudents();
   try {
     const allStudents = await db
       .select()
@@ -659,6 +704,7 @@ export async function getAllStudents(): Promise<StudentRecord[]> {
 }
 
 export async function getAlerts(): Promise<CounselorAlert[]> {
+  if (isMemoryMode()) return memoryStore.getAlerts();
   try {
     const rows = await db
       .select({
@@ -710,6 +756,7 @@ export async function getAlerts(): Promise<CounselorAlert[]> {
 export async function getInterventions(
   studentId?: string
 ): Promise<InterventionLog[]> {
+  if (isMemoryMode()) return memoryStore.getInterventions(studentId);
   try {
     const rows = studentId
       ? await db
@@ -753,6 +800,7 @@ export async function getInterventions(
 export async function computeCohortAnalytics(
   studentList: StudentRecord[]
 ): Promise<CohortAnalytics> {
+  if (isMemoryMode()) return memoryStore.computeCohortAnalytics(studentList);
   try {
     const total = studentList.length;
     const high = studentList.filter(
@@ -846,7 +894,41 @@ export async function computeCohortAnalytics(
   }
 }
 
+export async function findUserByUid(
+  uid: string
+): Promise<UserAccount | null> {
+  if (isMemoryMode()) return memoryStore.findUserByUid(uid);
+  try {
+    const [u] = await db
+      .select()
+      .from(users)
+      .where(eq(users.uid, uid))
+      .limit(1);
+    if (!u) return null;
+    return {
+      id: u.id,
+      uid: u.uid,
+      name: u.name,
+      email: u.email,
+      role: u.role as UserRole,
+      title: u.title,
+      linked_student_id: u.linkedStudentId,
+      avatar_url: u.avatarUrl,
+      active: u.active,
+      created_at: u.createdAt.toISOString(),
+    };
+  } catch (error) {
+    if (isConnectionError(error)) {
+      useMemoryFallback = true;
+      return memoryStore.findUserByUid(uid);
+    }
+    console.error('Database query failed (findUserByUid):', error);
+    throw new Error('Failed to verify user session.', { cause: error });
+  }
+}
+
 export async function getAllUsers(): Promise<UserAccount[]> {
+  if (isMemoryMode()) return memoryStore.getAllUsers();
   try {
     const rows = await db
       .select()
@@ -873,6 +955,7 @@ export async function getAllUsers(): Promise<UserAccount[]> {
 }
 
 export async function getDemoAccounts(): Promise<UserAccount[]> {
+  if (isMemoryMode()) return memoryStore.getDemoAccounts();
   const all = await getAllUsers();
   const roleOrder: Record<UserRole, number> = {
     admin: 0,
@@ -900,6 +983,7 @@ export async function createStudentRecord(input: {
   test_score: number;
   assignment_pct: number;
 }) {
+  if (isMemoryMode()) return memoryStore.createStudentRecord(input);
   try {
     const sid = input.student_id.trim().toUpperCase();
     const att = Math.max(0, Math.min(100, Math.round(input.attendance_pct)));
@@ -954,6 +1038,7 @@ export async function recordStudentMetrics(
     recorded_date?: string;
   }
 ) {
+  if (isMemoryMode()) return memoryStore.recordStudentMetrics(studentId, input);
   try {
     const [existing] = await db
       .select()
@@ -1013,6 +1098,7 @@ export async function bulkIngestMetrics(
     notes?: string;
   }>
 ) {
+  if (isMemoryMode()) return memoryStore.bulkIngestMetrics(rows);
   try {
     const today = new Date().toISOString().slice(0, 10);
     let processed = 0;
@@ -1095,6 +1181,7 @@ export async function bulkIngestMetrics(
 }
 
 export async function updateSystemThresholds(input: Partial<SystemConfig>) {
+  if (isMemoryMode()) return memoryStore.updateSystemThresholds(input);
   try {
     const current = await getSystemConfig();
     const nextHigh = Math.max(
@@ -1151,6 +1238,7 @@ export async function updateAlertStatus(
   alertId: number,
   status: AlertStatus
 ): Promise<CounselorAlert[]> {
+  if (isMemoryMode()) return memoryStore.updateAlertStatus(alertId, status);
   try {
     await db
       .update(counselorAlerts)
@@ -1175,6 +1263,7 @@ export async function insertInterventionLog(input: {
   content: string;
   scheduled_for?: string | null;
 }): Promise<InterventionLog> {
+  if (isMemoryMode()) return memoryStore.insertInterventionLog(input);
   try {
     const [inserted] = await db
       .insert(interventionLogs)
@@ -1221,6 +1310,10 @@ export async function insertInterventionLog(input: {
 export async function insertUrgentCrisisAlert(
   student: StudentRecord
 ): Promise<void> {
+  if (isMemoryMode()) {
+    memoryStore.insertUrgentCrisisAlert(student);
+    return;
+  }
   try {
     const dossier = {
       probability_score: student.assessment.probability_score,
@@ -1261,6 +1354,7 @@ export async function createUserAccount(input: {
   title?: string;
   linked_student_id?: string | null;
 }): Promise<UserAccount> {
+  if (isMemoryMode()) return memoryStore.createUserAccount(input);
   try {
     const uid = `provisioned-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const [created] = await db
@@ -1310,6 +1404,7 @@ export async function updateUserAccount(
     linked_student_id?: string | null;
   }
 ): Promise<UserAccount | null> {
+  if (isMemoryMode()) return memoryStore.updateUserAccount(id, input);
   try {
     const [existing] = await db
       .select()
